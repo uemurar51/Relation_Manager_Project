@@ -1,0 +1,3 @@
+/Users/uemurar51/sql4300/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+/Users/uemurar51/sql4300/cmake-build-debug/CMakeFiles/edit_cache.dir
+/Users/uemurar51/sql4300/cmake-build-debug/CMakeFiles/sql4300.dir
