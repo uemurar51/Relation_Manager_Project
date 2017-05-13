@@ -327,8 +327,8 @@ void HeapTable::update(const Handle handle, const ValueDict* new_values) {
 // or select).
 void HeapTable::del(const Handle handle) {
     open();
-    BlockID block_id = handle.first;
-    RecordID record_id = handle.second;
+    BlockID block_id = handle.block_id;
+    RecordID record_id = handle.record_id;
     SlottedPage* block = this->file.get(block_id);
     block->del(record_id);
     this->file.put(block);
@@ -378,8 +378,8 @@ ValueDict* HeapTable::project(Handle handle) {
 
 // Return a sequence of values for handle given by column_names.
 ValueDict* HeapTable::project(Handle handle, const ColumnNames* column_names) {
-	BlockID block_id = handle.first;
-	RecordID record_id = handle.second;
+	BlockID block_id = handle.block_id;
+	RecordID record_id = handle.record_id;
     SlottedPage* block = file.get(block_id);
     Dbt* data = block->get(record_id);
     ValueDict* row = unmarshal(data);

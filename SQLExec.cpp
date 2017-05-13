@@ -117,7 +117,7 @@ QueryResult *SQLExec::insert(const hsql::InsertStatement *statement) {
     // insert into indices
     auto index_names = SQLExec::indices->get_index_names(table_name);
     for (auto const& index_name: index_names) {
-        DbIndex& index = SQLExec::indices->get_index(table_name, index_name);
+        DbIndex& index = SQLExec::indices->get_index(table, index_name);
         index.insert(t_insert);
     }
 
@@ -234,7 +234,7 @@ QueryResult *SQLExec::del(const hsql::DeleteStatement *statement) {
     for (auto const& handle: *handles) {
         // delete from index before deleting from table
         for (auto const& index_name: index_names){
-            DbIndex& index = SQLExec::indices->get_index(table_name, index_name);
+            DbIndex& index = SQLExec::indices->get_index(table, index_name);
             index.del(handle);
         }
         table.del(handle);
@@ -250,19 +250,30 @@ QueryResult *SQLExec::del(const hsql::DeleteStatement *statement) {
     return new QueryResult(comment);
 }
 
-void SQLExec::column_definition(const hsql::ColumnDefinition *col, Identifier& column_name,
-                                ColumnAttribute& column_attribute) {
-    column_name = col->name;
-    switch (col->type) {
-        case hsql::ColumnDefinition::INT:
-            column_attribute.set_data_type(ColumnAttribute::INT);
-            break;
-        case hsql::ColumnDefinition::TEXT:
-            column_attribute.set_data_type(ColumnAttribute::TEXT);
-            break;
-        case hsql::ColumnDefinition::DOUBLE:
-        default:
-            throw SQLExecError("unrecognized data type");
+bool SQLExec::column_definition(const hsql::ColumnDefinition *col, Identifier& column_name,
+                                ColumnAttribute& column_attribute, ColumnNames*& primary_key) {
+    if (col->definitionType == hsql::ColumnDefinition::kColumn) {
+        column_name = col->name;
+        switch (col->type) {
+            case hsql::ColumnDefinition::INT:
+                column_attribute.set_data_type(ColumnAttribute::INT);
+                break;
+            case hsql::ColumnDefinition::TEXT:
+                column_attribute.set_data_type(ColumnAttribute::TEXT);
+                break;
+            case hsql::ColumnDefinition::DOUBLE:
+            default:
+                throw SQLExecError("unrecognized data type");
+        }
+        return true;
+    } else if (col->definitionType == hsql::ColumnDefinition::kPrimaryKey) {
+        primary_key = new ColumnNames();
+        for (auto const& colname: *col->primaryKeyColumns) {
+            primary_key->push_back(Identifier(colname));
+        }
+        return false;
+    } else {
+        throw SQLExecError("unrecognized column definition type");
     }
 }
 
@@ -279,27 +290,44 @@ QueryResult *SQLExec::create(const hsql::CreateStatement *statement) {
 
 QueryResult *SQLExec::create_table(const hsql::CreateStatement *statement) {
     Identifier table_name = statement->tableName;
-    ColumnNames column_names;
+    ColumnNames column_names, *primary_key = nullptr;
     ColumnAttributes column_attributes;
     Identifier column_name;
     ColumnAttribute column_attribute;
+    std::string storage_engine = "HEAP";
     for (hsql::ColumnDefinition *col : *statement->columns) {
-        column_definition(col, column_name, column_attribute);
-        column_names.push_back(column_name);
-        column_attributes.push_back(column_attribute);
+        if (column_definition(col, column_name, column_attribute, primary_key)) {
+            column_names.push_back(column_name);
+            column_attributes.push_back(column_attribute);
+        } else {
+            storage_engine = "BTREE";
+        }
     }
 
     // Add to schema: _tables and _columns
     ValueDict row;
     row["table_name"] = table_name;
+    row["storage_engine"] = storage_engine;
     Handle t_handle = SQLExec::tables->insert(&row);  // Insert into _tables
     try {
+        row.erase("storage_engine");
         Handles c_handles;
         DbRelation& columns = SQLExec::tables->get_table(Columns::TABLE_NAME);
         try {
             for (uint i = 0; i < column_names.size(); i++) {
                 row["column_name"] = column_names[i];
                 row["data_type"] = Value(column_attributes[i].get_data_type() == ColumnAttribute::INT ? "INT" : "TEXT");
+                row["primary_key_seq"] = 0;
+                if (primary_key != nullptr) {
+                    int seq = 1;
+                    for (auto const& pk: *primary_key) {
+                        if (pk == column_names[i]) {
+                            row["primary_key_seq"] = seq;
+                            break;
+                        }
+                        seq++;
+                    }
+                }
                 c_handles.push_back(columns.insert(&row));  // Insert into _columns
             }
 
@@ -357,7 +385,7 @@ QueryResult *SQLExec::create_index(const hsql::CreateStatement *statement) {
             i_handles.push_back(SQLExec::indices->insert(&row));
         }
 
-        DbIndex &index = SQLExec::indices->get_index(table_name, index_name);
+        DbIndex &index = SQLExec::indices->get_index(table, index_name);
         index.create();
 
     } catch (...) {
@@ -396,7 +424,7 @@ QueryResult *SQLExec::drop_table(const hsql::DropStatement *statement) {
 
     // remove any indices
     for (auto const& index_name: SQLExec::indices->get_index_names(table_name)) {
-        DbIndex& index = SQLExec::indices->get_index(table_name, index_name);
+        DbIndex& index = SQLExec::indices->get_index(table, index_name);
         index.drop();  // drop the index
     }
     Handles* handles = SQLExec::indices->select(&where);
@@ -425,7 +453,8 @@ QueryResult *SQLExec::drop_index(const hsql::DropStatement *statement) {
     Identifier index_name = statement->indexName;
 
     // drop index
-    DbIndex& index = SQLExec::indices->get_index(table_name, index_name);
+    DbRelation& table = SQLExec::tables->get_table(table_name);
+    DbIndex& index = SQLExec::indices->get_index(table, index_name);
     index.drop();
 
     // remove rows from _indices for this index

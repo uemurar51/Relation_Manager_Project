@@ -159,20 +159,33 @@ std::string ParseTreeToString::table_ref(const hsql::TableRef *table) {
 }
 
 std::string ParseTreeToString::column_definition(const hsql::ColumnDefinition *col) {
-    std::string ret(col->name);
-    switch (col->type) {
-        case hsql::ColumnDefinition::DOUBLE:
-            ret += " DOUBLE";
-            break;
-        case hsql::ColumnDefinition::INT:
-            ret += " INT";
-            break;
-        case hsql::ColumnDefinition::TEXT:
-            ret += " TEXT";
-            break;
-        default:
-            ret += " ...";
-            break;
+    std::string ret;
+    if (col->definitionType == hsql::ColumnDefinition::kColumn) {
+        ret += col->name;
+        switch (col->type) {
+            case hsql::ColumnDefinition::DOUBLE:
+                ret += " DOUBLE";
+                break;
+            case hsql::ColumnDefinition::INT:
+                ret += " INT";
+                break;
+            case hsql::ColumnDefinition::TEXT:
+                ret += " TEXT";
+                break;
+            default:
+                ret += " ...";
+                break;
+        }
+    } else {
+        ret += "PRIMARY KEY (";
+        bool doComma = false;
+        for (auto const& pkcol : *col->primaryKeyColumns) {
+            if (doComma)
+                ret += ", ";
+            ret += pkcol;
+            doComma = true;
+        }
+        ret += ")";
     }
     return ret;
 }

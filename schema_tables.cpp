@@ -49,8 +49,10 @@ std::map<Identifier,DbRelation*> Tables::table_cache;
 // get the column name for _tables column
 ColumnNames& Tables::COLUMN_NAMES() {
     static ColumnNames cn;
-    if (cn.empty())
+    if (cn.empty()) {
         cn.push_back("table_name");
+        cn.push_back("storage_engine");
+    }
     return cn;
 }
 
@@ -59,6 +61,7 @@ ColumnAttributes& Tables::COLUMN_ATTRIBUTES() {
     static ColumnAttributes cas;
     if (cas.empty()) {
         ColumnAttribute ca(ColumnAttribute::TEXT);
+        cas.push_back(ca);
         cas.push_back(ca);
     }
     return cas;
@@ -77,6 +80,7 @@ void Tables::create() {
     HeapTable::create();
     ValueDict row;
     row["table_name"] = Value("_tables");
+    row["storage_engine"] = Value("HEAP");
     insert(&row);
     row["table_name"] = Value("_columns");
     insert(&row);
@@ -87,7 +91,9 @@ void Tables::create() {
 // Manually check that table_name is unique.
 Handle Tables::insert(const ValueDict* row) {
     // Try SELECT * FROM _tables WHERE table_name = row["table_name"] and it should return nothing
-    Handles* handles = select(row);
+    ValueDict where;
+    where["table_name"] = row->at("table_name");
+    Handles* handles = select(&where);
     bool unique = handles->empty();
     delete handles;
     if (!unique)
@@ -110,13 +116,16 @@ void Tables::del(Handle handle) {
 }
 
 // Return a list of column names and column attributes for given table.
-void Tables::get_columns(Identifier table_name, ColumnNames &column_names, ColumnAttributes &column_attributes) {
+void Tables::get_columns(Identifier table_name, ColumnNames &column_names, ColumnAttributes &column_attributes,
+                         ColumnNames*& primary_key) {
     // SELECT * FROM _columns WHERE table_name = <table_name>
     ValueDict where;
     where["table_name"] = table_name;
     Handles* handles = Tables::columns_table->select(&where);
 
     ColumnAttribute column_attribute;
+    Identifier pk[DbIndex::MAX_COMPOSITE];
+    uint pk_max = 0;
     for (auto const& handle: *handles) {
         ValueDict* row = Tables::columns_table->project(handle);  // get the row's values: {'column_name': <name>, 'data_type': <type>}
 
@@ -135,9 +144,20 @@ void Tables::get_columns(Identifier table_name, ColumnNames &column_names, Colum
         column_attribute.set_data_type(data_type);
         column_attributes.push_back(column_attribute);
 
+        uint which = (uint) (*row)["primary_key_seq"].n;
+        pk[which - 1] = column_name;  // primary_key_seq is 1-based
+        if (which > pk_max)
+            pk_max = which;
+
         delete row;
     }
     delete handles;
+
+    if (pk_max > 0) {
+        primary_key = new ColumnNames();
+        for (uint i = 0; i < pk_max; i++)
+            primary_key->push_back(pk[i]);
+    }
 }
 
 // Return a table for given table_name.
@@ -146,11 +166,22 @@ DbRelation& Tables::get_table(Identifier table_name) {
     if (Tables::table_cache.find(table_name) != Tables::table_cache.end())
         return  *Tables::table_cache[table_name];
 
-    // otherwise assume it is a HeapTable (for now)
-    ColumnNames column_names;
+    ValueDict where;
+    where["table_name"] = table_name;
+    Handles *handles = this->select(&where);
+    ValueDict *row = this->project((*handles)[0]);
+    std::string storage_engine = row->at("storage_engine").s;
+
+    ColumnNames column_names, *primary_key = nullptr;
     ColumnAttributes column_attributes;
-    get_columns(table_name, column_names, column_attributes);
-    DbRelation* table = new HeapTable(table_name, column_names, column_attributes);
+    get_columns(table_name, column_names, column_attributes, primary_key);
+    DbRelation *table;
+    if (storage_engine == "HEAP")
+        table = new HeapTable(table_name, column_names, column_attributes);
+    else if (storage_engine == "BTREE")
+        table = new BTreeTable(table_name, column_names, column_attributes, *primary_key);
+    else
+        throw DbRelationError("Unknown storage engine: " + storage_engine);
     Tables::table_cache[table_name] = table;
     return *table;
 }
@@ -170,6 +201,7 @@ ColumnNames& Columns::COLUMN_NAMES() {
         cn.push_back("table_name");
         cn.push_back("column_name");
         cn.push_back("data_type");
+        cn.push_back("primary_key_seq");
     }
     return cn;
 }
@@ -179,6 +211,7 @@ ColumnAttributes& Columns::COLUMN_ATTRIBUTES() {
     static ColumnAttributes cas;
     if (cas.empty()) {
         ColumnAttribute ca(ColumnAttribute::TEXT);
+        cas.push_back(ca);
         cas.push_back(ca);
         cas.push_back(ca);
         cas.push_back(ca);
@@ -195,6 +228,7 @@ void Columns::create() {
     HeapTable::create();
     ValueDict row;
     row["data_type"] = Value("TEXT");  // all these are TEXT fields
+    row["primary_key_seq"] = 0;        // all these have no primary key
     row["table_name"] = Value("_tables");
     row["column_name"] = Value("table_name");
     insert(&row);
@@ -367,14 +401,14 @@ public:
     void drop() {}
     void open() {}
     void close() {}
-    Handles* lookup(ValueDict* key_values) const {return nullptr;}
+    Handles* lookup(ValueDict* key_values) {return nullptr;}
     void insert(Handle handle) {}
     void del(Handle handle) {}
 };
 
 
 // Return a table for given table_name.
-DbIndex& Indices::get_index(Identifier table_name, Identifier index_name) {
+DbIndex& Indices::get_index(DbRelation &table, Identifier index_name) {
     // if they are asking about an index we've once constructed, then just return that one
     std::pair<Identifier,Identifier> cache_key(table_name, index_name);
     if (Indices::index_cache.find(cache_key) != Indices::index_cache.end())
@@ -384,7 +418,6 @@ DbIndex& Indices::get_index(Identifier table_name, Identifier index_name) {
     ColumnNames column_names;
     bool is_hash, is_unique;
     get_columns(table_name, index_name, column_names, is_hash, is_unique);
-    DbRelation& table = Tables::get_table(table_name);
     DbIndex* index;
     if (is_hash) {
         index = new DummyIndex(table, index_name, column_names, is_unique);  // FIXME - change to HashIndex

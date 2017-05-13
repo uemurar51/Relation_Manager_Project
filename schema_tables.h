@@ -17,9 +17,8 @@ protected:
     static Columns* columns_table;
 
 public:
-    static void get_columns(Identifier table_name,
-                                    ColumnNames &column_names, ColumnAttributes &column_attributes);
-    static DbRelation& get_table(Identifier table_name);
+    static void get_columns(Identifier table_name, ColumnNames &column_names, ColumnAttributes &column_attributes,
+                            ColumnNames* &primary_key);
 
     Tables();
     virtual ~Tables() {}
@@ -27,6 +26,8 @@ public:
     virtual void create();
     virtual Handle insert(const ValueDict* row);
     virtual void del(Handle handle);
+
+    virtual DbRelation& get_table(Identifier table_name);
 
 private:
     static std::map<Identifier,DbRelation*> table_cache;
@@ -61,7 +62,7 @@ protected:
 public:
     virtual void get_columns(Identifier table_name, Identifier index_name,
                              ColumnNames &column_names, bool &is_hash, bool &is_unique);
-    virtual DbIndex& get_index(Identifier table_name, Identifier index_name);
+    virtual DbIndex& get_index(DbRelation &table, Identifier index_name);
     virtual IndexNames get_index_names(Identifier table_name);
 
     Indices();

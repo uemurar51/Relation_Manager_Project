@@ -63,6 +63,6 @@ protected:
     static QueryResult *del(const hsql::DeleteStatement *statement);
     static QueryResult *select(const hsql::SelectStatement *statement);
 
-    static void
-    column_definition(const hsql::ColumnDefinition *col, Identifier &column_name, ColumnAttribute &column_attribute);
+    static bool column_definition(const hsql::ColumnDefinition *col, Identifier &column_name,
+                                  ColumnAttribute &column_attribute, ColumnNames* &primary_key);
 };

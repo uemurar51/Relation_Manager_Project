@@ -101,10 +101,23 @@ public:
     bool operator<(const Value &other) const;
 };
 
+typedef std::vector<Value> KeyValue;
+typedef std::vector<KeyValue*> KeyValues;
+
+class Handle {
+public:
+    BlockID block_id;
+    RecordID record_id;
+    KeyValue key_value;
+
+    Handle() : block_id(0), record_id(0), key_value() {}
+    Handle(BlockID block_id, RecordID record_id) : block_id(block_id), record_id(record_id) {}
+    Handle(KeyValue kv) : key_value(kv) {}
+};
+
 typedef std::string Identifier;
 typedef std::vector<Identifier> ColumnNames;
 typedef std::vector<ColumnAttribute> ColumnAttributes;
-typedef std::pair<BlockID, RecordID> Handle;
 typedef std::vector<Handle> Handles;  // FIXME: will need to turn this into an iterator at some point
 typedef std::map<Identifier, Value> ValueDict;
 typedef std::vector<ValueDict*> ValueDicts;
@@ -116,9 +129,20 @@ public:
 
 class DbRelation {
 public:
-	DbRelation(Identifier table_name, ColumnNames column_names, ColumnAttributes column_attributes ) :
-		table_name(table_name), column_names(column_names), column_attributes(column_attributes) {}
-	virtual ~DbRelation() {}
+    DbRelation(Identifier table_name, ColumnNames column_names, ColumnAttributes column_attributes ) :
+            table_name(table_name),
+            column_names(column_names),
+            column_attributes(column_attributes),
+            primary_key(nullptr) {}
+
+    DbRelation(Identifier table_name, ColumnNames column_names, ColumnAttributes column_attributes,
+               const ColumnNames& primary_key) :
+            table_name(table_name),
+            column_names(column_names),
+            column_attributes(column_attributes),
+            primary_key(new ColumnNames(primary_key)) {}
+
+    virtual ~DbRelation() {}
 
 	virtual void create() = 0;
 	virtual void create_if_not_exists() = 0;
@@ -146,11 +170,14 @@ public:
     virtual const ColumnAttributes get_column_attributes() const { return column_attributes; }
     virtual ColumnAttributes* get_column_attributes(const ColumnNames &select_column_names) const;
     virtual Identifier get_table_name() const { return table_name; }
+    virtual bool has_primary_key() const { return this->primary_key == nullptr; }
+    virtual const ColumnNames *get_primary_key() const { return this->primary_key; }
 
 protected:
 	Identifier table_name;
 	ColumnNames column_names;
 	ColumnAttributes column_attributes;
+    ColumnNames *primary_key;
 };
 
 class DbIndex {
@@ -167,8 +194,8 @@ public:
     virtual void open() = 0;
     virtual void close() = 0;
 
-    virtual Handles* lookup(ValueDict* key_values) const = 0;
-    virtual Handles* range(ValueDict* min_key, ValueDict* max_key) const {
+    virtual Handles* lookup(ValueDict* key_values) = 0;
+    virtual Handles* range(ValueDict* min_key, ValueDict* max_key) {
         throw DbRelationError("range index query not supported");
     }
 
